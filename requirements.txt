@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-multipart
+openai
+numpy
+sentence-transformers==3.0.1
+pgvector
+pypdf
+rank-bm25
+python-dotenv
+psycopg[binary]
+langchain-text-splitters
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.1+cpu

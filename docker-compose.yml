@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: .
+    container_name: ai-system
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      HF_ENDPOINT: https://hf-mirror.com
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: ai-frontend
+    network_mode: host
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
