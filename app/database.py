@@ -1,13 +1,14 @@
+import os
 import psycopg
 from pgvector.psycopg import register_vector
 
 # 连接 PostgreSQL 数据库
 connection = psycopg.connect(
-    host="localhost",
-    port=5432,
-    dbname="ai_knowledge",
-    user="postgres",
-    password="123456",
+    host=os.getenv("DB_HOST","127.0.0.1"),
+    port=int(os.getenv("DB_PORT", "5432")),
+    dbname=os.getenv("DB_NAME", "ai_knowledge"),
+    user=os.getenv("DB_USER", "postgres"),
+    password=os.getenv("DB_PASSWORD"),
     autocommit=True
 )
 register_vector(connection)
