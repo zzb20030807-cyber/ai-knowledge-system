@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
+from app.auth import hash_password
 from pypdf import PdfReader
 from io import BytesIO
 from app.embedding import get_embeddings
@@ -19,7 +20,9 @@ from app.database import (
     hybrid_search_documents,
     get_documents,
     delete_document,
-    check_document_exists
+    check_document_exists,
+    create_user,
+    get_user_by_username
 )
 from app.rerank import rerank_documents
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -35,11 +38,51 @@ class ChatRequest(BaseModel):
 
 class SessionRequest(BaseModel):
     title: str = "新聊天"
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=6, max_length=128)
 
 
 @app.get("/")
 def read_root():
     return {"message": "AI 智能问答系统-v.1.0"}
+
+@app.post("/register")
+def register(request: RegisterRequest):
+
+    username = request.username.strip()
+
+    if not username:
+        raise HTTPException(
+            status_code=400,
+            detail="用户名不能为空"
+        )
+
+    # 检查用户名是否已经存在
+    existing_user = get_user_by_username(username)
+
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="用户名已存在"
+        )
+
+    # 密码哈希
+    password_hash = hash_password(
+        request.password
+    )
+
+    # 保存用户
+    user_id = create_user(
+        username,
+        password_hash
+    )
+
+    return {
+        "message": "注册成功",
+        "user_id": user_id,
+        "username": username
+    }
 
 
 # 创建聊天

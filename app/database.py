@@ -354,3 +354,38 @@ def hybrid_search_documents(query, query_embedding, top_k=3):
         )
         for item in sorted_results[:top_k]
     ]
+# =========================
+# 用户注册
+# =========================
+
+def create_user(username, password_hash):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO users (username, password_hash)
+            VALUES (%s, %s)
+            RETURNING id
+            """,
+            (username, password_hash)
+        )
+
+        user_id = cursor.fetchone()[0]
+
+    connection.commit()
+
+    return user_id
+
+
+# 根据用户名查询用户
+def get_user_by_username(username):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, username, password_hash
+            FROM users
+            WHERE username = %s
+            """,
+            (username,)
+        )
+
+        return cursor.fetchone()
