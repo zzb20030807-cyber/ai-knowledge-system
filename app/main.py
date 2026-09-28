@@ -3,11 +3,24 @@ from fastapi import (
     UploadFile,
     File,
     HTTPException,
-    Depends
+    Depends,
+    Request
 )
-from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import (
+    StreamingResponse,
+    JSONResponse
+)
+from fastapi.security import (
+    HTTPBearer,
+    HTTPAuthorizationCredentials
+)
+from fastapi.exceptions import RequestValidationError
+
 from pydantic import BaseModel, Field
+from fastapi.encoders import jsonable_encoder
+
+from pypdf import PdfReader
+from io import BytesIO
 
 from app.auth import (
     hash_password,
@@ -15,9 +28,6 @@ from app.auth import (
     create_access_token,
     decode_access_token
 )
-
-from pypdf import PdfReader
-from io import BytesIO
 
 from app.embedding import get_embeddings
 from app.services.qwen_services import ask_qwen
@@ -40,12 +50,140 @@ from app.database import (
 )
 
 from app.rerank import rerank_documents
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from app.logger import logger
 
+from langchain_text_splitters import (
+    RecursiveCharacterTextSplitter
+)
+
+
+# =========================
+# FastAPI
+# =========================
 
 app = FastAPI()
 
 security = HTTPBearer()
+
+
+# =========================
+# 请求日志中间件
+# =========================
+
+@app.middleware("http")
+async def log_requests(
+    request: Request,
+    call_next
+):
+    import time
+
+    start_time = time.time()
+
+    try:
+
+        response = await call_next(request)
+
+    except Exception:
+
+        logger.exception(
+            "%s %s | 未处理异常",
+            request.method,
+            request.url.path
+        )
+
+        raise
+
+    process_time = time.time() - start_time
+
+    logger.info(
+        "%s %s -> %s (%.3fs)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        process_time
+    )
+
+    return response
+
+
+# =========================
+# HTTP 异常统一处理
+# =========================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(
+    request: Request,
+    exc: HTTPException
+):
+
+    logger.warning(
+        "%s %s -> %s | %s",
+        request.method,
+        request.url.path,
+        exc.status_code,
+        exc.detail
+    )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "code": exc.status_code,
+            "message": exc.detail
+        }
+    )
+
+
+# =========================
+# 参数验证异常
+# =========================
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError
+):
+
+    logger.warning(
+        "%s %s -> 422 | 参数验证失败",
+        request.method,
+        request.url.path
+    )
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "code": 422,
+            "message": "请求参数错误",
+            "details": jsonable_encoder(
+                exc.errors()
+            )
+        }
+    )
+
+
+# =========================
+# 未处理异常
+# =========================
+
+@app.exception_handler(Exception)
+async def general_exception_handler(
+    request: Request,
+    exc: Exception
+):
+
+    logger.exception(
+        "%s %s -> 500 | 未处理异常",
+        request.method,
+        request.url.path
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "code": 500,
+            "message": "服务器内部错误"
+        }
+    )
 
 
 # =========================
@@ -66,6 +204,7 @@ class RegisterRequest(BaseModel):
         min_length=3,
         max_length=50
     )
+
     password: str = Field(
         min_length=6,
         max_length=128
@@ -77,6 +216,7 @@ class LoginRequest(BaseModel):
         min_length=3,
         max_length=50
     )
+
     password: str = Field(
         min_length=6,
         max_length=128
@@ -88,23 +228,36 @@ class LoginRequest(BaseModel):
 # =========================
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: HTTPAuthorizationCredentials = Depends(
+        security
+    )
 ):
+
     token = credentials.credentials
 
     try:
-        payload = decode_access_token(token)
+
+        payload = decode_access_token(
+            token
+        )
 
     except ValueError as e:
+
         raise HTTPException(
             status_code=401,
             detail=str(e)
         )
 
-    user_id = payload.get("user_id")
-    username = payload.get("username")
+    user_id = payload.get(
+        "user_id"
+    )
+
+    username = payload.get(
+        "username"
+    )
 
     if not user_id or not username:
+
         raise HTTPException(
             status_code=401,
             detail="Token 信息不完整"
@@ -122,6 +275,7 @@ def get_current_user(
 
 @app.get("/")
 def read_root():
+
     return {
         "message": "AI 智能问答系统-v.1.0"
     }
@@ -132,19 +286,25 @@ def read_root():
 # =========================
 
 @app.post("/register")
-def register(request: RegisterRequest):
+def register(
+    request: RegisterRequest
+):
 
     username = request.username.strip()
 
     if not username:
+
         raise HTTPException(
             status_code=400,
             detail="用户名不能为空"
         )
 
-    existing_user = get_user_by_username(username)
+    existing_user = get_user_by_username(
+        username
+    )
 
     if existing_user:
+
         raise HTTPException(
             status_code=409,
             detail="用户名已存在"
@@ -159,6 +319,12 @@ def register(request: RegisterRequest):
         password_hash
     )
 
+    logger.info(
+        "用户注册成功 | user_id=%s | username=%s",
+        user_id,
+        username
+    )
+
     return {
         "message": "注册成功",
         "user_id": user_id,
@@ -171,19 +337,25 @@ def register(request: RegisterRequest):
 # =========================
 
 @app.post("/login")
-def login(request: LoginRequest):
+def login(
+    request: LoginRequest
+):
 
     username = request.username.strip()
 
     if not username:
+
         raise HTTPException(
             status_code=400,
             detail="用户名不能为空"
         )
 
-    user = get_user_by_username(username)
+    user = get_user_by_username(
+        username
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=401,
             detail="用户名或密码错误"
@@ -195,6 +367,7 @@ def login(request: LoginRequest):
         request.password,
         password_hash
     ):
+
         raise HTTPException(
             status_code=401,
             detail="用户名或密码错误"
@@ -203,6 +376,12 @@ def login(request: LoginRequest):
     access_token = create_access_token(
         user_id=user_id,
         username=db_username
+    )
+
+    logger.info(
+        "用户登录成功 | user_id=%s | username=%s",
+        user_id,
+        db_username
     )
 
     return {
@@ -221,13 +400,24 @@ def login(request: LoginRequest):
 @app.post("/session")
 def create_chat_session(
     request: SessionRequest,
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
-    user_id = current_user["user_id"]
+
+    user_id = current_user[
+        "user_id"
+    ]
 
     session_id = create_session(
         user_id=user_id,
         title=request.title
+    )
+
+    logger.info(
+        "创建聊天成功 | user_id=%s | session_id=%s",
+        user_id,
+        session_id
     )
 
     return {
@@ -242,9 +432,14 @@ def create_chat_session(
 
 @app.get("/sessions")
 def list_sessions(
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
-    user_id = current_user["user_id"]
+
+    user_id = current_user[
+        "user_id"
+    ]
 
     sessions = get_sessions(
         user_id
@@ -263,17 +458,25 @@ def list_sessions(
 # 获取某个聊天的消息
 # =========================
 
-@app.get("/sessions/{session_id}/messages")
+@app.get(
+    "/sessions/{session_id}/messages"
+)
 def get_session_messages(
     session_id: int,
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
-    user_id = current_user["user_id"]
+
+    user_id = current_user[
+        "user_id"
+    ]
 
     if not check_session_owner(
         session_id,
         user_id
     ):
+
         raise HTTPException(
             status_code=403,
             detail="无权访问该聊天会话"
@@ -297,17 +500,25 @@ def get_session_messages(
 # 删除聊天
 # =========================
 
-@app.delete("/sessions/{session_id}")
+@app.delete(
+    "/sessions/{session_id}"
+)
 def remove_session(
     session_id: int,
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
-    user_id = current_user["user_id"]
+
+    user_id = current_user[
+        "user_id"
+    ]
 
     if not check_session_owner(
         session_id,
         user_id
     ):
+
         raise HTTPException(
             status_code=403,
             detail="无权访问该聊天会话"
@@ -316,6 +527,12 @@ def remove_session(
     delete_session(
         session_id,
         user_id
+    )
+
+    logger.info(
+        "删除聊天成功 | user_id=%s | session_id=%s",
+        user_id,
+        session_id
     )
 
     return {
@@ -330,26 +547,33 @@ def remove_session(
 @app.post("/chat")
 def chat(
     request: ChatRequest,
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
 
-    user_id = current_user["user_id"]
+    user_id = current_user[
+        "user_id"
+    ]
 
+    # 检查聊天会话归属
     if not check_session_owner(
         request.session_id,
         user_id
     ):
+
         raise HTTPException(
             status_code=403,
             detail="无权访问该聊天会话"
         )
 
-    print(
-        "收到请求",
-        request.message
+    logger.info(
+        "收到聊天请求 | user_id=%s | session_id=%s",
+        user_id,
+        request.session_id
     )
 
-    # 保存完整AI回答
+    # 保存完整 AI 回答
     full_response = ""
 
     # =========================
@@ -361,7 +585,7 @@ def chat(
     )[0]
 
     # =========================
-    # ② 当前用户自己的知识库进行 Hybrid Search
+    # ② 当前用户知识库 Hybrid Search
     # =========================
 
     results = hybrid_search_documents(
@@ -371,20 +595,14 @@ def chat(
         top_k=10
     )
 
-    print(
-        "===== Hybrid Search结果 ====="
+    logger.info(
+        "Hybrid Search完成 | user_id=%s | results=%s",
+        user_id,
+        len(results)
     )
 
-    for i, result in enumerate(
-        results
-    ):
-        print(
-            f"第{i+1}条:",
-            result[0][:100]
-        )
-
     # =========================
-    # ③ 提取文本内容给Rerank
+    # ③ 提取文本
     # =========================
 
     documents = [
@@ -393,7 +611,7 @@ def chat(
     ]
 
     # =========================
-    # ④ Rerank重新排序
+    # ④ Rerank
     # =========================
 
     reranked_docs = rerank_documents(
@@ -402,20 +620,14 @@ def chat(
         top_k=3
     )
 
-    print(
-        "===== Rerank结果 ====="
+    logger.info(
+        "Rerank完成 | user_id=%s | results=%s",
+        user_id,
+        len(reranked_docs)
     )
 
-    for i, doc in enumerate(
-        reranked_docs
-    ):
-        print(
-            f"第{i+1}条:",
-            doc[:100]
-        )
-
     # =========================
-    # ⑤ 拼接最终知识上下文
+    # ⑤ 拼接知识上下文
     # =========================
 
     context = "\n\n".join(
@@ -447,25 +659,15 @@ def chat(
 {sources}
 """
 
-    print(
-        "🔍 用户问题：",
-        request.message
+    logger.info(
+        "RAG检索完成 | user_id=%s | session_id=%s | sources=%s",
+        user_id,
+        request.session_id,
+        len(reranked_docs)
     )
-
-    print(
-        "📚 Rerank后的知识："
-    )
-
-    print(context)
-
-    print(
-        "📄 知识来源："
-    )
-
-    print(sources)
 
     # =========================
-    # ⑥ 流式生成回答
+    # ⑥ 流式生成
     # =========================
 
     def generate():
@@ -501,8 +703,14 @@ def chat(
             request.session_id
         )
 
+        logger.info(
+            "聊天记录保存成功 | user_id=%s | session_id=%s",
+            user_id,
+            request.session_id
+        )
+
         # =========================
-        # ⑧ 第一条消息自动生成标题
+        # ⑧ 自动生成标题
         # =========================
 
         messages = get_messages(
@@ -518,6 +726,12 @@ def chat(
                 request.session_id,
                 title,
                 user_id
+            )
+
+            logger.info(
+                "聊天标题更新 | user_id=%s | session_id=%s",
+                user_id,
+                request.session_id
             )
 
     # =========================
@@ -558,18 +772,22 @@ def split_text(text):
 
 
 # =========================
-# PDF上传接口
+# PDF上传
 # =========================
 
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
 
-    user_id = current_user["user_id"]
+    user_id = current_user[
+        "user_id"
+    ]
 
-    # 检查当前用户是否已经上传过该文件
+    # 检查当前用户是否已经上传过
     if check_document_exists(
         file.filename,
         user_id
@@ -580,22 +798,23 @@ async def upload_file(
             "filename": file.filename
         }
 
-    # 判断是不是 PDF
+    # 判断 PDF
     if file.content_type != "application/pdf":
 
-        return {
-            "error": "目前只支持 PDF 文件"
-        }
+        raise HTTPException(
+            status_code=400,
+            detail="目前只支持 PDF 文件"
+        )
 
-    # 读取上传文件
+    # 读取文件
     contents = await file.read()
 
-    # 读取 PDF
+    # PDF
     pdf = PdfReader(
         BytesIO(contents)
     )
 
-    # 保存每一页文本
+    # 保存每页文本
     pages_text = []
 
     for page_number, page in enumerate(
@@ -670,6 +889,13 @@ async def upload_file(
             item["chunk_id"]
         )
 
+    logger.info(
+        "知识库上传成功 | user_id=%s | filename=%s | chunks=%s",
+        user_id,
+        file.filename,
+        len(all_chunks)
+    )
+
     # =========================
     # 返回结果
     # =========================
@@ -691,10 +917,14 @@ async def upload_file(
 
 @app.get("/documents")
 def documents(
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
 
-    user_id = current_user["user_id"]
+    user_id = current_user[
+        "user_id"
+    ]
 
     docs = get_documents(
         user_id
@@ -709,17 +939,40 @@ def documents(
 # 删除当前用户的知识库文件
 # =========================
 
-@app.delete("/documents/{filename}")
+@app.delete(
+    "/documents/{filename}"
+)
 def remove_document(
     filename: str,
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
 
-    user_id = current_user["user_id"]
+    user_id = current_user[
+        "user_id"
+    ]
+
+    # 检查当前用户是否拥有该文件
+    if not check_document_exists(
+        filename,
+        user_id
+    ):
+
+        raise HTTPException(
+            status_code=404,
+            detail="文件不存在"
+        )
 
     delete_document(
         filename,
         user_id
+    )
+
+    logger.info(
+        "知识库删除成功 | user_id=%s | filename=%s",
+        user_id,
+        filename
     )
 
     return {
@@ -734,8 +987,11 @@ def remove_document(
 
 @app.get("/me")
 def get_me(
-    current_user=Depends(get_current_user)
+    current_user=Depends(
+        get_current_user
+    )
 ):
+
     return {
         "message": "身份验证成功",
         "user_id": current_user["user_id"],
