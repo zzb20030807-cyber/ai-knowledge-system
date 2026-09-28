@@ -1,14 +1,13 @@
 
+import os
 import streamlit as st
 import requests
 from urllib.parse import quote
 
-
-# =========================================================
-# 基础配置
-# =========================================================
-
-BACKEND_URL = "http://127.0.0.1:8000"
+BACKEND_URL = os.getenv(
+    "BACKEND_URL",
+    "http://127.0.0.1:8000"
+)
 
 
 st.set_page_config(

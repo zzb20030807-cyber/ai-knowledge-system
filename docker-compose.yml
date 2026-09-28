@@ -1,21 +1,100 @@
 services:
-  backend:
-    build: .
-    container_name: ai-system
-    network_mode: host
-    env_file:
-      - .env
+
+  # =====================================================
+  # PostgreSQL + pgvector
+  # =====================================================
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: ai-postgres
+
     environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER} -d ${DB_NAME}"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+    restart: unless-stopped
+
+
+  # =====================================================
+  # FastAPI Backend
+  # =====================================================
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: ai-system
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+
       HF_ENDPOINT: https://hf-mirror.com
+
     volumes:
       - hf-cache:/root/.cache/huggingface
+
+    ports:
+      - "8000:8000"
+
     restart: unless-stopped
+
+
+  # =====================================================
+  # Streamlit Frontend
+  # =====================================================
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+
     container_name: ai-frontend
-    network_mode: host
+
+    depends_on:
+      - backend
+
+    environment:
+      BACKEND_URL: http://backend:8000
+
+    ports:
+      - "8501:8501"
+
     restart: unless-stopped
 
+
+# =======================================================
+# Volumes
+# =======================================================
+
 volumes:
+
+  postgres-data:
+
   hf-cache:
