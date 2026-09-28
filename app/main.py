@@ -6,8 +6,8 @@ from fastapi import (
     Depends
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field
 
 from app.auth import (
     hash_password,
@@ -62,13 +62,25 @@ class SessionRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=50)
-    password: str = Field(min_length=6, max_length=128)
+    username: str = Field(
+        min_length=3,
+        max_length=50
+    )
+    password: str = Field(
+        min_length=6,
+        max_length=128
+    )
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=50)
-    password: str = Field(min_length=6, max_length=128)
+    username: str = Field(
+        min_length=3,
+        max_length=50
+    )
+    password: str = Field(
+        min_length=6,
+        max_length=128
+    )
 
 
 # =========================
@@ -130,7 +142,6 @@ def register(request: RegisterRequest):
             detail="用户名不能为空"
         )
 
-    # 检查用户名是否已经存在
     existing_user = get_user_by_username(username)
 
     if existing_user:
@@ -139,12 +150,10 @@ def register(request: RegisterRequest):
             detail="用户名已存在"
         )
 
-    # 密码哈希
     password_hash = hash_password(
         request.password
     )
 
-    # 保存用户
     user_id = create_user(
         username,
         password_hash
@@ -172,7 +181,6 @@ def login(request: LoginRequest):
             detail="用户名不能为空"
         )
 
-    # 根据用户名查询用户
     user = get_user_by_username(username)
 
     if not user:
@@ -183,7 +191,6 @@ def login(request: LoginRequest):
 
     user_id, db_username, password_hash = user
 
-    # 验证密码
     if not verify_password(
         request.password,
         password_hash
@@ -193,7 +200,6 @@ def login(request: LoginRequest):
             detail="用户名或密码错误"
         )
 
-    # 生成 JWT
     access_token = create_access_token(
         user_id=user_id,
         username=db_username
@@ -278,6 +284,14 @@ def get_session_messages(
         user_id
     )
 
+    return [
+        {
+            "user_message": message[0],
+            "ai_message": message[1]
+        }
+        for message in messages
+    ]
+
 
 # =========================
 # 删除聊天
@@ -289,6 +303,15 @@ def remove_session(
     current_user=Depends(get_current_user)
 ):
     user_id = current_user["user_id"]
+
+    if not check_session_owner(
+        session_id,
+        user_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="无权访问该聊天会话"
+        )
 
     delete_session(
         session_id,
@@ -310,10 +333,8 @@ def chat(
     current_user=Depends(get_current_user)
 ):
 
-    # 当前登录用户
     user_id = current_user["user_id"]
 
-    # 检查这个聊天会话是不是当前用户自己的
     if not check_session_owner(
         request.session_id,
         user_id
@@ -340,12 +361,13 @@ def chat(
     )[0]
 
     # =========================
-    # ② Hybrid Search召回候选文档
+    # ② 当前用户自己的知识库进行 Hybrid Search
     # =========================
 
     results = hybrid_search_documents(
         request.message,
         query_vector,
+        user_id,
         top_k=10
     )
 
@@ -353,7 +375,9 @@ def chat(
         "===== Hybrid Search结果 ====="
     )
 
-    for i, result in enumerate(results):
+    for i, result in enumerate(
+        results
+    ):
         print(
             f"第{i+1}条:",
             result[0][:100]
@@ -382,7 +406,9 @@ def chat(
         "===== Rerank结果 ====="
     )
 
-    for i, doc in enumerate(reranked_docs):
+    for i, doc in enumerate(
+        reranked_docs
+    ):
         print(
             f"第{i+1}条:",
             doc[:100]
@@ -396,13 +422,11 @@ def chat(
         reranked_docs
     )
 
-    # 建立“内容 -> 来源信息”的对应关系
     result_map = {
         result[0]: result
         for result in results
     }
 
-    # 只显示Rerank后的Top3来源
     sources = "\n".join(
         [
             f"- {result_map[doc][1]} "
@@ -413,7 +437,6 @@ def chat(
         ]
     )
 
-    # 给大模型的完整上下文
     rag_context = f"""
 知识库内容：
 
@@ -449,16 +472,13 @@ def chat(
 
         nonlocal full_response
 
-        # 调用Qwen
         for chunk in ask_qwen(
             request.message,
             rag_context
         ):
 
-            # 返回前端
             yield chunk
 
-            # 保存完整回答
             full_response += chunk
 
         # 添加参考来源
@@ -511,7 +531,7 @@ def chat(
 
 
 # =========================
-# 文本切分函数
+# 文本切分
 # =========================
 
 def split_text(text):
@@ -543,12 +563,16 @@ def split_text(text):
 
 @app.post("/upload")
 async def upload_file(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user)
 ):
 
-    # 检查文件是否已经存在
+    user_id = current_user["user_id"]
+
+    # 检查当前用户是否已经上传过该文件
     if check_document_exists(
-        file.filename
+        file.filename,
+        user_id
     ):
 
         return {
@@ -574,7 +598,6 @@ async def upload_file(
     # 保存每一页文本
     pages_text = []
 
-    # 按页读取PDF
     for page_number, page in enumerate(
         pdf.pages,
         start=1
@@ -639,6 +662,7 @@ async def upload_file(
     ):
 
         save_document(
+            user_id,
             item["content"],
             vector,
             file.filename,
@@ -662,13 +686,19 @@ async def upload_file(
 
 
 # =========================
-# 获取知识库文件列表
+# 获取当前用户的知识库
 # =========================
 
 @app.get("/documents")
-def documents():
+def documents(
+    current_user=Depends(get_current_user)
+):
 
-    docs = get_documents()
+    user_id = current_user["user_id"]
+
+    docs = get_documents(
+        user_id
+    )
 
     return {
         "documents": docs
@@ -676,16 +706,20 @@ def documents():
 
 
 # =========================
-# 删除知识库文件
+# 删除当前用户的知识库文件
 # =========================
 
 @app.delete("/documents/{filename}")
 def remove_document(
-    filename: str
+    filename: str,
+    current_user=Depends(get_current_user)
 ):
 
+    user_id = current_user["user_id"]
+
     delete_document(
-        filename
+        filename,
+        user_id
     )
 
     return {

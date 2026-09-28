@@ -178,7 +178,7 @@ def update_session_title(session_id, title, user_id):
 def delete_session(session_id, user_id):
     with connection.cursor() as cursor:
 
-        # 只有当前用户自己的聊天才能删除消息
+        # 删除当前用户自己的聊天消息
         cursor.execute(
             """
             DELETE FROM chat_messages
@@ -218,6 +218,7 @@ def delete_session(session_id, user_id):
 # =========================
 
 def save_document(
+    user_id,
     content,
     embedding,
     filename,
@@ -229,15 +230,17 @@ def save_document(
             """
             INSERT INTO documents
             (
+                user_id,
                 content,
                 embedding,
                 filename,
                 page_number,
                 chunk_id
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
+                user_id,
                 content,
                 embedding,
                 filename,
@@ -253,7 +256,11 @@ def save_document(
 # 向量相似度搜索
 # =========================
 
-def search_similar(embedding, top_k=3):
+def search_similar(
+    embedding,
+    user_id,
+    top_k=3
+):
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -261,11 +268,13 @@ def search_similar(embedding, top_k=3):
                 content,
                 embedding <=> %s AS distance
             FROM documents
+            WHERE user_id = %s
             ORDER BY embedding <=> %s
             LIMIT %s
             """,
             (
                 embedding,
+                user_id,
                 embedding,
                 top_k
             )
@@ -277,10 +286,10 @@ def search_similar(embedding, top_k=3):
 
 
 # =========================
-# 获取知识库文件列表
+# 获取当前用户的知识库文件列表
 # =========================
 
-def get_documents():
+def get_documents(user_id):
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -288,9 +297,11 @@ def get_documents():
                 filename,
                 COUNT(*) AS chunk_count
             FROM documents
+            WHERE user_id = %s
             GROUP BY filename
             ORDER BY filename
-            """
+            """,
+            (user_id,)
         )
 
         documents = cursor.fetchall()
@@ -299,18 +310,22 @@ def get_documents():
 
 
 # =========================
-# 检查文件是否存在
+# 检查当前用户是否已经上传该文件
 # =========================
 
-def check_document_exists(filename):
+def check_document_exists(filename, user_id):
     with connection.cursor() as cursor:
         cursor.execute(
             """
             SELECT COUNT(*)
             FROM documents
             WHERE filename = %s
+              AND user_id = %s
             """,
-            (filename,)
+            (
+                filename,
+                user_id
+            )
         )
 
         count = cursor.fetchone()[0]
@@ -319,17 +334,21 @@ def check_document_exists(filename):
 
 
 # =========================
-# 删除整个 PDF 文档
+# 删除当前用户的 PDF 文档
 # =========================
 
-def delete_document(filename):
+def delete_document(filename, user_id):
     with connection.cursor() as cursor:
         cursor.execute(
             """
             DELETE FROM documents
             WHERE filename = %s
+              AND user_id = %s
             """,
-            (filename,)
+            (
+                filename,
+                user_id
+            )
         )
 
     connection.commit()
@@ -339,7 +358,11 @@ def delete_document(filename):
 # 向量搜索
 # =========================
 
-def search_documents(query_embedding, top_k=3):
+def search_documents(
+    query_embedding,
+    user_id,
+    top_k=3
+):
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -350,10 +373,12 @@ def search_documents(query_embedding, top_k=3):
                 chunk_id
             FROM documents
             WHERE embedding IS NOT NULL
+              AND user_id = %s
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
             (
+                user_id,
                 str(query_embedding),
                 top_k
             )
@@ -368,7 +393,11 @@ def search_documents(query_embedding, top_k=3):
 # 关键词搜索
 # =========================
 
-def keyword_search_documents(query, top_k=3):
+def keyword_search_documents(
+    query,
+    user_id,
+    top_k=3
+):
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -378,11 +407,13 @@ def keyword_search_documents(query, top_k=3):
                 page_number,
                 chunk_id
             FROM documents
-            WHERE to_tsvector('simple', content)
-            @@ plainto_tsquery('simple', %s)
+            WHERE user_id = %s
+              AND to_tsvector('simple', content)
+              @@ plainto_tsquery('simple', %s)
             LIMIT %s
             """,
             (
+                user_id,
                 query,
                 top_k
             )
@@ -400,18 +431,21 @@ def keyword_search_documents(query, top_k=3):
 def hybrid_search_documents(
     query,
     query_embedding,
+    user_id,
     top_k=3
 ):
 
     # 1. 向量检索
     vector_results = search_documents(
         query_embedding,
+        user_id,
         top_k=10
     )
 
     # 2. 关键词检索
     keyword_results = keyword_search_documents(
         query,
+        user_id,
         top_k=10
     )
 
