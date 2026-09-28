@@ -4,9 +4,9 @@ import requests
 from urllib.parse import quote
 
 
-# =========================
+# =========================================================
 # 基础配置
-# =========================
+# =========================================================
 
 BACKEND_URL = "http://127.0.0.1:8000"
 
@@ -18,9 +18,9 @@ st.set_page_config(
 )
 
 
-# =========================
-# Session State 初始化
-# =========================
+# =========================================================
+# Session State
+# =========================================================
 
 if "token" not in st.session_state:
     st.session_state.token = None
@@ -38,11 +38,14 @@ if "initialized" not in st.session_state:
     st.session_state.initialized = False
 
 
-# =========================
-# JWT 请求头
-# =========================
+# =========================================================
+# 工具函数
+# =========================================================
 
 def auth_headers():
+    """
+    返回 JWT 请求头
+    """
     if not st.session_state.token:
         return {}
 
@@ -51,9 +54,46 @@ def auth_headers():
     }
 
 
-# =========================
+def get_error_message(response):
+    """
+    从后端统一错误格式中提取提示信息
+    """
+    try:
+        data = response.json()
+
+        return (
+            data.get("message")
+            or data.get("detail")
+            or "请求失败"
+        )
+
+    except ValueError:
+        return "请求失败"
+
+
+def logout():
+    """
+    清除当前登录状态
+    """
+    st.session_state.token = None
+    st.session_state.username = None
+    st.session_state.session_id = None
+    st.session_state.messages = []
+    st.session_state.initialized = False
+
+
+def handle_unauthorized(response):
+    """
+    处理 Token 失效
+    """
+    if response.status_code == 401:
+        logout()
+        st.rerun()
+
+
+# =========================================================
 # 登录
-# =========================
+# =========================================================
 
 def login_user(username, password):
 
@@ -69,9 +109,9 @@ def login_user(username, password):
     return response
 
 
-# =========================
+# =========================================================
 # 注册
-# =========================
+# =========================================================
 
 def register_user(username, password):
 
@@ -87,9 +127,9 @@ def register_user(username, password):
     return response
 
 
-# =========================
-# 当前用户信息
-# =========================
+# =========================================================
+# 获取当前用户
+# =========================================================
 
 def get_current_user():
 
@@ -99,14 +139,16 @@ def get_current_user():
         timeout=30
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
     return response.json()
 
 
-# =========================
+# =========================================================
 # 创建聊天
-# =========================
+# =========================================================
 
 def create_new_session():
 
@@ -119,14 +161,16 @@ def create_new_session():
         timeout=30
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
     return response.json()["session_id"]
 
 
-# =========================
-# 获取历史聊天
-# =========================
+# =========================================================
+# 获取聊天列表
+# =========================================================
 
 def get_sessions():
 
@@ -136,15 +180,16 @@ def get_sessions():
         timeout=30
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
-    # 后端直接返回列表
     return response.json()
 
 
-# =========================
+# =========================================================
 # 获取聊天消息
-# =========================
+# =========================================================
 
 def get_messages(session_id):
 
@@ -154,15 +199,16 @@ def get_messages(session_id):
         timeout=30
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
-    # 后端直接返回列表
     return response.json()
 
 
-# =========================
+# =========================================================
 # 删除聊天
-# =========================
+# =========================================================
 
 def delete_session(session_id):
 
@@ -172,12 +218,14 @@ def delete_session(session_id):
         timeout=30
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
 
-# =========================
+# =========================================================
 # 获取知识库
-# =========================
+# =========================================================
 
 def get_documents():
 
@@ -187,14 +235,16 @@ def get_documents():
         timeout=30
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
     return response.json()["documents"]
 
 
-# =========================
+# =========================================================
 # 删除知识库文件
-# =========================
+# =========================================================
 
 def delete_document(filename):
 
@@ -209,12 +259,14 @@ def delete_document(filename):
         timeout=30
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
 
-# =========================
-# 上传知识库文件
-# =========================
+# =========================================================
+# 上传 PDF
+# =========================================================
 
 def upload_document(uploaded_file):
 
@@ -231,14 +283,16 @@ def upload_document(uploaded_file):
         timeout=120
     )
 
+    handle_unauthorized(response)
+
     response.raise_for_status()
 
     return response.json()
 
 
-# =========================
-# 加载聊天消息到前端
-# =========================
+# =========================================================
+# 加载聊天
+# =========================================================
 
 def load_session(session_id):
 
@@ -266,26 +320,30 @@ def load_session(session_id):
         )
 
 
-# =========================
+# =========================================================
 # 登录 / 注册页面
-# =========================
+# =========================================================
 
 if not st.session_state.token:
 
     st.title("🤖 AI 智能问答系统")
 
-    tab1, tab2 = st.tabs(
+    st.caption(
+        "企业级 AI 知识库问答系统"
+    )
+
+    tab_login, tab_register = st.tabs(
         [
-            "登录",
-            "注册"
+            "🔐 登录",
+            "📝 注册"
         ]
     )
 
-    # =========================
+    # =====================================================
     # 登录
-    # =========================
+    # =====================================================
 
-    with tab1:
+    with tab_login:
 
         st.subheader("用户登录")
 
@@ -294,12 +352,14 @@ if not st.session_state.token:
         ):
 
             username = st.text_input(
-                "用户名"
+                "用户名",
+                placeholder="请输入用户名"
             )
 
             password = st.text_input(
                 "密码",
-                type="password"
+                type="password",
+                placeholder="请输入密码"
             )
 
             submitted = st.form_submit_button(
@@ -320,7 +380,7 @@ if not st.session_state.token:
                 try:
 
                     response = login_user(
-                        username,
+                        username.strip(),
                         password
                     )
 
@@ -348,17 +408,10 @@ if not st.session_state.token:
 
                     else:
 
-                        try:
-                            detail = response.json().get(
-                                "detail",
-                                "登录失败"
-                            )
-
-                        except ValueError:
-                            detail = "登录失败"
-
                         st.error(
-                            detail
+                            get_error_message(
+                                response
+                            )
                         )
 
                 except requests.exceptions.RequestException as e:
@@ -367,13 +420,13 @@ if not st.session_state.token:
                         f"无法连接后端：{e}"
                     )
 
-    # =========================
+    # =====================================================
     # 注册
-    # =========================
+    # =====================================================
 
-    with tab2:
+    with tab_register:
 
-        st.subheader("用户注册")
+        st.subheader("创建账号")
 
         with st.form(
             "register_form"
@@ -381,13 +434,13 @@ if not st.session_state.token:
 
             new_username = st.text_input(
                 "用户名",
-                key="register_username"
+                placeholder="3-50 个字符"
             )
 
             new_password = st.text_input(
                 "密码",
                 type="password",
-                key="register_password"
+                placeholder="至少 6 个字符"
             )
 
             register_submitted = st.form_submit_button(
@@ -408,7 +461,7 @@ if not st.session_state.token:
                 try:
 
                     response = register_user(
-                        new_username,
+                        new_username.strip(),
                         new_password
                     )
 
@@ -420,17 +473,10 @@ if not st.session_state.token:
 
                     else:
 
-                        try:
-                            detail = response.json().get(
-                                "detail",
-                                "注册失败"
-                            )
-
-                        except ValueError:
-                            detail = "注册失败"
-
                         st.error(
-                            detail
+                            get_error_message(
+                                response
+                            )
                         )
 
                 except requests.exceptions.RequestException as e:
@@ -442,16 +488,16 @@ if not st.session_state.token:
     st.stop()
 
 
-# =========================
-# 已登录
-# =========================
+# =========================================================
+# 已登录页面
+# =========================================================
 
 st.title("🤖 AI 智能问答系统")
 
 
-# =========================
-# 获取当前用户
-# =========================
+# =========================================================
+# 初始化当前用户
+# =========================================================
 
 try:
 
@@ -467,13 +513,10 @@ try:
 
         if sessions:
 
-            # sessions:
-            # [
-            #     [id, title],
-            #     [id, title]
-            # ]
-
-            st.session_state.session_id = sessions[0]["id"]
+            # 默认打开最近的一条聊天
+            st.session_state.session_id = (
+                sessions[0]["id"]
+            )
 
             load_session(
                 st.session_state.session_id
@@ -481,10 +524,8 @@ try:
 
         else:
 
-            st.session_state.session_id = (
-                create_new_session()
-            )
-
+            # 没有聊天时，不主动创建空聊天
+            st.session_state.session_id = None
             st.session_state.messages = []
 
         st.session_state.initialized = True
@@ -492,14 +533,12 @@ try:
 
 except requests.exceptions.HTTPError as e:
 
-    if e.response is not None and e.response.status_code == 401:
+    if (
+        e.response is not None
+        and e.response.status_code == 401
+    ):
 
-        st.session_state.token = None
-        st.session_state.username = None
-        st.session_state.session_id = None
-        st.session_state.messages = []
-        st.session_state.initialized = False
-
+        logout()
         st.rerun()
 
     else:
@@ -515,16 +554,20 @@ except requests.exceptions.RequestException as e:
     )
 
 
-# =========================
+# =========================================================
 # 左侧边栏
-# =========================
+# =========================================================
 
 with st.sidebar:
+
+    # =====================================================
+    # 用户信息
+    # =====================================================
 
     st.header("👤 用户")
 
     st.write(
-        f"当前用户：{st.session_state.username}"
+        f"当前用户：**{st.session_state.username}**"
     )
 
     if st.button(
@@ -532,22 +575,18 @@ with st.sidebar:
         use_container_width=True
     ):
 
-        st.session_state.token = None
-        st.session_state.username = None
-        st.session_state.session_id = None
-        st.session_state.messages = []
-        st.session_state.initialized = False
-
+        logout()
         st.rerun()
 
     st.divider()
 
-    # =========================
+    # =====================================================
     # 聊天记录
-    # =========================
+    # =====================================================
 
     st.header("💬 聊天记录")
 
+    # 新聊天
     if st.button(
         "＋ 新聊天",
         use_container_width=True
@@ -555,8 +594,10 @@ with st.sidebar:
 
         try:
 
+            session_id = create_new_session()
+
             st.session_state.session_id = (
-                create_new_session()
+                session_id
             )
 
             st.session_state.messages = []
@@ -571,9 +612,19 @@ with st.sidebar:
 
     st.divider()
 
+    # =====================================================
+    # 历史聊天列表
+    # =====================================================
+
     try:
 
         sessions = get_sessions()
+
+        if not sessions:
+
+            st.caption(
+                "暂无聊天记录"
+            )
 
         for session in sessions:
 
@@ -583,6 +634,10 @@ with st.sidebar:
             col1, col2 = st.columns(
                 [5, 1]
             )
+
+            # -----------------------------
+            # 打开聊天
+            # -----------------------------
 
             with col1:
 
@@ -606,6 +661,10 @@ with st.sidebar:
                             f"加载聊天失败：{e}"
                         )
 
+            # -----------------------------
+            # 删除聊天
+            # -----------------------------
+
             with col2:
 
                 if st.button(
@@ -627,24 +686,6 @@ with st.sidebar:
                             st.session_state.session_id = None
                             st.session_state.messages = []
 
-                            remaining_sessions = get_sessions()
-
-                            if remaining_sessions:
-
-                                st.session_state.session_id = (
-                                    remaining_sessions[0]["id"]
-                                )
-
-                                load_session(
-                                    st.session_state.session_id
-                                )
-
-                            else:
-
-                                st.session_state.session_id = (
-                                    create_new_session()
-                                )
-
                         st.rerun()
 
                     except requests.exceptions.RequestException as e:
@@ -656,23 +697,27 @@ with st.sidebar:
     except requests.exceptions.RequestException as e:
 
         st.warning(
-            f"聊天记录暂时无法加载：{e}"
+            "聊天记录暂时无法加载"
         )
 
     st.divider()
 
-    # =========================
+    # =====================================================
     # 知识库
-    # =========================
+    # =====================================================
 
     st.header("📚 知识库")
 
     uploaded_file = st.file_uploader(
-        "上传 PDF",
+        "上传 PDF 文档",
         type=["pdf"]
     )
 
     if uploaded_file is not None:
+
+        st.caption(
+            f"当前文件：{uploaded_file.name}"
+        )
 
         if st.button(
             "上传到知识库",
@@ -681,9 +726,13 @@ with st.sidebar:
 
             try:
 
-                result = upload_document(
-                    uploaded_file
-                )
+                with st.spinner(
+                    "正在解析 PDF 并建立向量索引..."
+                ):
+
+                    result = upload_document(
+                        uploaded_file
+                    )
 
                 if "message" in result:
 
@@ -709,17 +758,8 @@ with st.sidebar:
 
             except requests.exceptions.HTTPError as e:
 
-                try:
-                    detail = e.response.json().get(
-                        "detail",
-                        "上传失败"
-                    )
-
-                except ValueError:
-                    detail = "上传失败"
-
                 st.error(
-                    detail
+                    f"上传失败：{get_error_message(e.response)}"
                 )
 
             except requests.exceptions.RequestException as e:
@@ -728,9 +768,9 @@ with st.sidebar:
                     f"上传失败：{e}"
                 )
 
-    # =========================
+    # =====================================================
     # 知识库文件列表
-    # =========================
+    # =====================================================
 
     try:
 
@@ -773,22 +813,39 @@ with st.sidebar:
 
                     st.rerun()
 
+                except requests.exceptions.HTTPError as e:
+
+                    st.error(
+                        f"删除失败：{get_error_message(e.response)}"
+                    )
+
                 except requests.exceptions.RequestException as e:
 
                     st.error(
                         f"删除失败：{e}"
                     )
 
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
 
         st.warning(
             "知识库接口暂时不可用"
         )
 
 
-# =========================
+# =========================================================
+# 当前聊天
+# =========================================================
+
+if st.session_state.session_id is not None:
+
+    st.caption(
+        f"当前会话 ID：{st.session_state.session_id}"
+    )
+
+
+# =========================================================
 # 显示历史消息
-# =========================
+# =========================================================
 
 for message in st.session_state.messages:
 
@@ -801,9 +858,9 @@ for message in st.session_state.messages:
         )
 
 
-# =========================
+# =========================================================
 # 用户输入
-# =========================
+# =========================================================
 
 question = st.chat_input(
     "请输入你的问题"
@@ -812,7 +869,10 @@ question = st.chat_input(
 
 if question:
 
-    # 如果没有当前聊天
+    # =====================================================
+    # 没有聊天时，自动创建
+    # =====================================================
+
     if st.session_state.session_id is None:
 
         try:
@@ -829,9 +889,9 @@ if question:
 
             st.stop()
 
-    # =========================
+    # =====================================================
     # 显示用户问题
-    # =========================
+    # =====================================================
 
     with st.chat_message(
         "user"
@@ -843,9 +903,9 @@ if question:
 
     try:
 
-        # =========================
-        # 请求 FastAPI
-        # =========================
+        # =================================================
+        # 请求后端
+        # =================================================
 
         response = requests.post(
             f"{BACKEND_URL}/chat",
@@ -863,13 +923,41 @@ if question:
             timeout=120
         )
 
+        # -------------------------------------------------
+        # Token 过期
+        # -------------------------------------------------
+
+        if response.status_code == 401:
+
+            logout()
+
+            st.warning(
+                "登录状态已失效，请重新登录。"
+            )
+
+            st.rerun()
+
+        # -------------------------------------------------
+        # 没有权限
+        # -------------------------------------------------
+
+        if response.status_code == 403:
+
+            st.error(
+                get_error_message(
+                    response
+                )
+            )
+
+            st.stop()
+
         response.raise_for_status()
 
         response.encoding = "utf-8"
 
-        # =========================
+        # =================================================
         # 流式数据生成器
-        # =========================
+        # =================================================
 
         def response_generator():
 
@@ -882,9 +970,9 @@ if question:
 
                     yield chunk
 
-        # =========================
+        # =================================================
         # 显示 AI 回答
-        # =========================
+        # =================================================
 
         with st.chat_message(
             "assistant"
@@ -894,9 +982,9 @@ if question:
                 response_generator()
             )
 
-        # =========================
-        # 保存到前端状态
-        # =========================
+        # =================================================
+        # 保存前端状态
+        # =================================================
 
         st.session_state.messages.append(
             {
@@ -914,34 +1002,13 @@ if question:
 
     except requests.exceptions.HTTPError as e:
 
-        if e.response is not None and e.response.status_code == 401:
-
-            st.error(
-                "登录状态已失效，请重新登录。"
-            )
-
-            st.session_state.token = None
-            st.session_state.username = None
-            st.session_state.session_id = None
-            st.session_state.messages = []
-            st.session_state.initialized = False
-
-            st.rerun()
-
-        elif e.response is not None and e.response.status_code == 403:
-
-            st.error(
-                "你没有权限访问这个聊天会话。"
-            )
-
-        else:
-
-            st.error(
-                f"请求失败：{e}"
-            )
+        st.error(
+            f"请求失败：{get_error_message(e.response)}"
+        )
 
     except requests.exceptions.RequestException as e:
 
         st.error(
             f"请求后端失败：{e}"
         )
+
