@@ -1,19 +1,35 @@
 import os
+
 import psycopg
+from dotenv import load_dotenv
 from pgvector.psycopg import register_vector
 
+
+load_dotenv()
+
+
+# =========================
 # 连接 PostgreSQL 数据库
+# =========================
+
 connection = psycopg.connect(
-    host=os.getenv("DB_HOST","127.0.0.1"),
+    host=os.getenv("DB_HOST", "127.0.0.1"),
     port=int(os.getenv("DB_PORT", "5432")),
     dbname=os.getenv("DB_NAME", "ai_knowledge"),
     user=os.getenv("DB_USER", "postgres"),
     password=os.getenv("DB_PASSWORD"),
     autocommit=True
 )
+
 register_vector(connection)
 
+print("数据库连接成功！")
+
+
+# =========================
 # 保存聊天记录
+# =========================
+
 def save_message(user_message, ai_message, session_id):
     with connection.cursor() as cursor:
         cursor.execute(
@@ -22,22 +38,33 @@ def save_message(user_message, ai_message, session_id):
             (user_message, ai_message, session_id)
             VALUES (%s, %s, %s)
             """,
-            (user_message, ai_message, session_id)
+            (
+                user_message,
+                ai_message,
+                session_id
+            )
         )
 
     connection.commit()
 
 
+# =========================
 # 创建新的聊天
-def create_session(title="新聊天"):
+# =========================
+
+def create_session(user_id, title="新聊天"):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO chat_sessions (title)
-            VALUES (%s)
+            INSERT INTO chat_sessions
+            (title, user_id)
+            VALUES (%s, %s)
             RETURNING id
             """,
-            (title,)
+            (
+                title,
+                user_id
+            )
         )
 
         session_id = cursor.fetchone()[0]
@@ -47,15 +74,22 @@ def create_session(title="新聊天"):
     return session_id
 
 
-# 🟢 新增：查询所有聊天会话
-def get_sessions():
+# =========================
+# 获取当前用户的所有聊天
+# =========================
+
+def get_sessions(user_id):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id, title
+            SELECT
+                id,
+                title
             FROM chat_sessions
+            WHERE user_id = %s
             ORDER BY created_at DESC
-            """
+            """,
+            (user_id,)
         )
 
         sessions = cursor.fetchall()
@@ -63,65 +97,125 @@ def get_sessions():
     return sessions
 
 
-# 🟢 新增：查询某一个聊天里的所有消息
-def get_messages(session_id):
+# =========================
+# 检查聊天是否属于当前用户
+# =========================
+
+def check_session_owner(session_id, user_id):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT user_message, ai_message
-            FROM chat_messages
-            WHERE session_id = %s
-            ORDER BY id ASC
+            SELECT id
+            FROM chat_sessions
+            WHERE id = %s
+              AND user_id = %s
             """,
-            (session_id,)
+            (
+                session_id,
+                user_id
+            )
+        )
+
+        return cursor.fetchone() is not None
+
+
+# =========================
+# 获取某个聊天里的所有消息
+# =========================
+
+def get_messages(session_id, user_id):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                cm.user_message,
+                cm.ai_message
+            FROM chat_messages cm
+            JOIN chat_sessions cs
+                ON cm.session_id = cs.id
+            WHERE cm.session_id = %s
+              AND cs.user_id = %s
+            ORDER BY cm.id ASC
+            """,
+            (
+                session_id,
+                user_id
+            )
         )
 
         messages = cursor.fetchall()
 
     return messages
 
-# 🟢 新增：修改聊天标题
-def update_session_title(session_id, title):
+
+# =========================
+# 修改聊天标题
+# =========================
+
+def update_session_title(session_id, title, user_id):
     with connection.cursor() as cursor:
         cursor.execute(
             """
             UPDATE chat_sessions
             SET title = %s
             WHERE id = %s
+              AND user_id = %s
             """,
-            (title, session_id)
+            (
+                title,
+                session_id,
+                user_id
+            )
         )
 
     connection.commit()
 
 
-print("数据库连接成功！")
+# =========================
+# 删除一个聊天会话
+# =========================
 
-# 🟢 新增：删除一个聊天会话
-def delete_session(session_id):
+def delete_session(session_id, user_id):
     with connection.cursor() as cursor:
 
-        # 先删除这个聊天里的所有消息
+        # 只有当前用户自己的聊天才能删除消息
         cursor.execute(
             """
             DELETE FROM chat_messages
             WHERE session_id = %s
+              AND session_id IN (
+                  SELECT id
+                  FROM chat_sessions
+                  WHERE id = %s
+                    AND user_id = %s
+              )
             """,
-            (session_id,)
+            (
+                session_id,
+                session_id,
+                user_id
+            )
         )
 
-        # 再删除聊天本身
+        # 删除当前用户自己的聊天会话
         cursor.execute(
             """
             DELETE FROM chat_sessions
             WHERE id = %s
+              AND user_id = %s
             """,
-            (session_id,)
+            (
+                session_id,
+                user_id
+            )
         )
 
     connection.commit()
 
 
+# =========================
+# 保存知识库文档
+# =========================
 
 def save_document(
     content,
@@ -133,8 +227,14 @@ def save_document(
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO documents 
-            (content, embedding, filename, page_number, chunk_id)
+            INSERT INTO documents
+            (
+                content,
+                embedding,
+                filename,
+                page_number,
+                chunk_id
+            )
             VALUES (%s, %s, %s, %s, %s)
             """,
             (
@@ -147,31 +247,46 @@ def save_document(
         )
 
     connection.commit()
-    def search_similar(embedding, top_k=3):
-        with connection.cursor() as cursor:
-            cursor.execute(
+
+
+# =========================
+# 向量相似度搜索
+# =========================
+
+def search_similar(embedding, top_k=3):
+    with connection.cursor() as cursor:
+        cursor.execute(
             """
-            SELECT content, embedding <=> %s AS distance
+            SELECT
+                content,
+                embedding <=> %s AS distance
             FROM documents
             ORDER BY embedding <=> %s
             LIMIT %s
             """,
-            (embedding, embedding, top_k)
+            (
+                embedding,
+                embedding,
+                top_k
+            )
         )
 
         results = cursor.fetchall()
 
-        return results
+    return results
+
+
+# =========================
 # 获取知识库文件列表
+# =========================
+
 def get_documents():
-
     with connection.cursor() as cursor:
-
         cursor.execute(
             """
-            SELECT 
+            SELECT
                 filename,
-                COUNT(*) as chunk_count
+                COUNT(*) AS chunk_count
             FROM documents
             GROUP BY filename
             ORDER BY filename
@@ -182,10 +297,13 @@ def get_documents():
 
     return documents
 
+
+# =========================
+# 检查文件是否存在
+# =========================
+
 def check_document_exists(filename):
-
     with connection.cursor() as cursor:
-
         cursor.execute(
             """
             SELECT COUNT(*)
@@ -200,12 +318,12 @@ def check_document_exists(filename):
     return count > 0
 
 
+# =========================
+# 删除整个 PDF 文档
+# =========================
 
-# 删除整个PDF文档
 def delete_document(filename):
-
     with connection.cursor() as cursor:
-
         cursor.execute(
             """
             DELETE FROM documents
@@ -216,43 +334,13 @@ def delete_document(filename):
 
     connection.commit()
 
+
+# =========================
+# 向量搜索
+# =========================
+
 def search_documents(query_embedding, top_k=3):
-
     with connection.cursor() as cursor:
-
-        cursor.execute(
-            """
-            SELECT 
-                content,
-                filename,
-                page_number,
-                chunk_id
-
-            FROM documents
-
-            WHERE embedding IS NOT NULL
-
-            ORDER BY embedding <=> %s::vector
-
-            LIMIT %s
-            """,
-
-            (
-                str(query_embedding),
-                top_k
-            )
-        )
-
-
-        results = cursor.fetchall()
-
-
-    return results
-
-def keyword_search_documents(query, top_k=3):
-
-    with connection.cursor() as cursor:
-
         cursor.execute(
             """
             SELECT
@@ -260,28 +348,60 @@ def keyword_search_documents(query, top_k=3):
                 filename,
                 page_number,
                 chunk_id
-
             FROM documents
-
-            WHERE to_tsvector('simple', content)
-            @@ plainto_tsquery('simple', %s)
-
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,
+            (
+                str(query_embedding),
+                top_k
+            )
+        )
 
+        results = cursor.fetchall()
+
+    return results
+
+
+# =========================
+# 关键词搜索
+# =========================
+
+def keyword_search_documents(query, top_k=3):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                content,
+                filename,
+                page_number,
+                chunk_id
+            FROM documents
+            WHERE to_tsvector('simple', content)
+            @@ plainto_tsquery('simple', %s)
+            LIMIT %s
+            """,
             (
                 query,
                 top_k
             )
         )
 
-
         results = cursor.fetchall()
-
 
     return results
 
-def hybrid_search_documents(query, query_embedding, top_k=3):
+
+# =========================
+# Hybrid Search
+# =========================
+
+def hybrid_search_documents(
+    query,
+    query_embedding,
+    top_k=3
+):
 
     # 1. 向量检索
     vector_results = search_documents(
@@ -301,8 +421,14 @@ def hybrid_search_documents(query, query_embedding, top_k=3):
     vector_weight = 0.7
     keyword_weight = 0.3
 
+    # =========================
     # 向量检索排名计分
-    for rank, result in enumerate(vector_results, start=1):
+    # =========================
+
+    for rank, result in enumerate(
+        vector_results,
+        start=1
+    ):
 
         content, filename, page_number, chunk_id = result
 
@@ -316,8 +442,14 @@ def hybrid_search_documents(query, query_embedding, top_k=3):
             "chunk_id": chunk_id
         }
 
+    # =========================
     # 关键词检索排名计分
-    for rank, result in enumerate(keyword_results, start=1):
+    # =========================
+
+    for rank, result in enumerate(
+        keyword_results,
+        start=1
+    ):
 
         content, filename, page_number, chunk_id = result
 
@@ -337,14 +469,20 @@ def hybrid_search_documents(query, query_embedding, top_k=3):
                 "chunk_id": chunk_id
             }
 
-    # 4. 按最终分数排序
+    # =========================
+    # 按最终分数排序
+    # =========================
+
     sorted_results = sorted(
         scores.values(),
         key=lambda x: x["score"],
         reverse=True
     )
 
-    # 5. 返回最终结果
+    # =========================
+    # 返回最终结果
+    # =========================
+
     return [
         (
             item["content"],
@@ -354,6 +492,8 @@ def hybrid_search_documents(query, query_embedding, top_k=3):
         )
         for item in sorted_results[:top_k]
     ]
+
+
 # =========================
 # 用户注册
 # =========================
@@ -362,11 +502,15 @@ def create_user(username, password_hash):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO users (username, password_hash)
+            INSERT INTO users
+            (username, password_hash)
             VALUES (%s, %s)
             RETURNING id
             """,
-            (username, password_hash)
+            (
+                username,
+                password_hash
+            )
         )
 
         user_id = cursor.fetchone()[0]
@@ -376,12 +520,18 @@ def create_user(username, password_hash):
     return user_id
 
 
+# =========================
 # 根据用户名查询用户
+# =========================
+
 def get_user_by_username(username):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id, username, password_hash
+            SELECT
+                id,
+                username,
+                password_hash
             FROM users
             WHERE username = %s
             """,
